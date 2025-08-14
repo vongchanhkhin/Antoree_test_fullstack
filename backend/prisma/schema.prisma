@@ -1,0 +1,453 @@
+// This is your Prisma schema file.
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== Lookup Tables =====
+model Role {
+  id          String @id @db.VarChar(32)
+  description String? @db.Text
+  
+  // Relations
+  users User[]
+  
+  @@map("roles")
+}
+
+model Level {
+  id       String @id @db.VarChar(8)
+  orderNo  Int    @unique @map("order_no")
+  
+  // Relations
+  profiles Profile[]
+  posts    Post[]
+  
+  @@map("levels")
+}
+
+model Skill {
+  id String @id @db.VarChar(32)
+  
+  @@map("skills")
+}
+
+// ===== Auth / Profile =====
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique @db.VarChar(255)
+  passwordHash String?  @map("password_hash") @db.Text
+  provider     String   @default("local") @db.VarChar(20)
+  providerId   String   @map("provider_id") @db.VarChar(255)
+  roleId       String   @map("role_id") @db.VarChar(32)
+  isActive     Boolean  @default(true) @map("is_active") @db.TinyInt
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  role         Role           @relation(fields: [roleId], references: [id])
+  profile      Profile?
+  userBadges   UserBadge[]
+  posts        Post[]
+  comments     Comment[]
+  votes        Vote[]
+  reports      Report[]
+  artifacts    Artifact[]
+  quizSubmissions QuizSubmission[]
+  reviewedModerations ModerationQueue[] @relation("Reviewer")
+  contributions Contribution[] @relation("Contributor")
+  moderatedContributions Contribution[] @relation("Moderator")
+  
+  @@unique([provider, providerId], map: "ux_provider")
+  @@map("users")
+}
+
+model Profile {
+  userId      String    @id @map("user_id")
+  username    String?   @unique @db.VarChar(50)
+  displayName String?   @map("display_name") @db.VarChar(100)
+  bio         String?   @db.Text
+  avatarUrl   String?   @map("avatar_url") @db.Text
+  levelId     String?   @map("level_id") @db.VarChar(8)
+  points      Int       @default(0)
+  reputation  Int       @default(0)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level Level? @relation(fields: [levelId], references: [id])
+  
+  @@map("profiles")
+}
+
+model Badge {
+  id          String @id @default(cuid())
+  code        String @unique @db.VarChar(64)
+  name        String @db.VarChar(128)
+  description String? @db.Text
+  
+  // Relations
+  userBadges UserBadge[]
+  
+  @@map("badges")
+}
+
+model UserBadge {
+  userId   String   @map("user_id")
+  badgeId  String   @map("badge_id")
+  earnedAt DateTime @default(now()) @map("earned_at")
+  
+  // Relations
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  
+  @@id([userId, badgeId])
+  @@map("user_badges")
+}
+
+// ===== UGC: Post / Tag / Media =====
+enum PostStatus {
+  draft
+  published
+  rejected
+  deleted
+}
+
+model Post {
+  id            String      @id @default(cuid())
+  authorId      String      @map("author_id")
+  title         String      @db.VarChar(300)
+  content       String      @db.MediumText
+  levelId       String?     @map("level_id") @db.VarChar(8)
+  skills        Json        @db.Json
+  status        PostStatus  @default(draft)
+  hotScore      Decimal     @default(0) @map("hot_score") @db.Decimal(16, 6)
+  upvotes       Int         @default(0)
+  downvotes     Int         @default(0)
+  commentsCount Int         @default(0) @map("comments_count")
+  publishedAt   DateTime?   @map("published_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  
+  // Relations
+  author        User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  level         Level?         @relation(fields: [levelId], references: [id])
+  postTags      PostTag[]
+  postMedia     PostMedia[]
+  comments      Comment[]
+  artifacts     Artifact[]
+  contributions Contribution[]
+  
+  @@index([status, hotScore(sort: Desc), createdAt(sort: Desc)], map: "idx_posts_status_hot")
+  @@index([levelId], map: "idx_posts_level")
+  @@fulltext([title, content], map: "ft_posts")
+  @@map("posts")
+}
+
+model Tag {
+  id   String @id @default(cuid())
+  slug String @unique @db.VarChar(100)
+  name String @db.VarChar(100)
+  
+  // Relations
+  postTags PostTag[]
+  
+  @@map("tags")
+}
+
+model PostTag {
+  postId String @map("post_id")
+  tagId  String @map("tag_id")
+  
+  // Relations
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  
+  @@id([postId, tagId])
+  @@map("post_tags")
+}
+
+enum MediaKind {
+  image
+  audio
+  video
+}
+
+model PostMedia {
+  id     String    @id @default(cuid())
+  postId String    @map("post_id")
+  kind   MediaKind
+  url    String    @db.Text
+  meta   Json      @db.Json
+  
+  // Relations
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  
+  @@index([postId], map: "idx_media_post")
+  @@map("post_media")
+}
+
+// ===== Comments (threaded) =====
+enum CommentStatus {
+  visible
+  hidden
+  deleted
+  rejected
+}
+
+model Comment {
+  id        String        @id @default(cuid())
+  postId    String        @map("post_id")
+  authorId  String        @map("author_id")
+  parentId  String?       @map("parent_id")
+  content   String        @db.Text
+  upvotes   Int           @default(0)
+  downvotes Int           @default(0)
+  status    CommentStatus @default(visible)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+  
+  // Relations
+  post     Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author   User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent   Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  Comment[] @relation("CommentReplies")
+  
+  // Comment tree relations
+  ancestors  CommentTree[] @relation("CommentAncestor")
+  descendants CommentTree[] @relation("CommentDescendant")
+  
+  @@index([postId, createdAt], map: "idx_comments_post_time")
+  @@index([parentId], map: "idx_comments_parent")
+  @@map("comments")
+}
+
+model CommentTree {
+  ancestorId   String @map("ancestor_id")
+  descendantId String @map("descendant_id")
+  depth        Int
+  
+  // Relations
+  ancestor   Comment @relation("CommentAncestor", fields: [ancestorId], references: [id], onDelete: Cascade)
+  descendant Comment @relation("CommentDescendant", fields: [descendantId], references: [id], onDelete: Cascade)
+  
+  @@id([ancestorId, descendantId])
+  @@index([descendantId], map: "idx_ct_desc")
+  @@map("comment_tree")
+}
+
+// ===== Contributions (Growth Hack Feature) =====
+enum ContributionType {
+  edit
+  add_example
+  add_question
+}
+
+enum ContributionStatus {
+  pending
+  approved
+  rejected
+}
+
+model Contribution {
+  id            String            @id @default(cuid())
+  postId        String            @map("post_id")
+  contributorId String            @map("contributor_id")
+  type          ContributionType
+  content       String            @db.Text
+  description   String?           @db.Text
+  status        ContributionStatus @default(pending)
+  moderatorId   String?           @map("moderator_id")
+  moderatorNote String?           @map("moderator_note") @db.Text
+  pointsAwarded Int               @default(0) @map("points_awarded")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+  approvedAt    DateTime?         @map("approved_at")
+  
+  // Relations
+  post        Post  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  contributor User  @relation("Contributor", fields: [contributorId], references: [id], onDelete: Cascade)
+  moderator   User? @relation("Moderator", fields: [moderatorId], references: [id], onDelete: SetNull)
+  
+  @@index([postId, status], map: "idx_contributions_post_status")
+  @@index([contributorId], map: "idx_contributions_contributor")
+  @@index([status, createdAt], map: "idx_contributions_status_time")
+  @@map("contributions")
+}
+
+// ===== Votes (post|comment) =====
+enum VoteTarget {
+  post
+  comment
+}
+
+model Vote {
+  id         String     @id @default(cuid())
+  userId     String     @map("user_id")
+  targetType VoteTarget @map("target_type")
+  targetId   String     @map("target_id")
+  value      Int        @db.TinyInt // -1 or 1
+  createdAt  DateTime   @default(now()) @map("created_at")
+  
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, targetType, targetId], map: "ux_vote")
+  @@index([targetType, targetId], map: "idx_votes_target")
+  @@map("votes")
+}
+
+// ===== Report & Moderation =====
+enum ReportTarget {
+  post
+  comment
+  user
+}
+
+model Report {
+  id         String       @id @default(cuid())
+  reporterId String?      @map("reporter_id")
+  targetType ReportTarget @map("target_type")
+  targetId   String       @map("target_id")
+  reason     String       @db.Text
+  createdAt  DateTime     @default(now()) @map("created_at")
+  
+  // Relations
+  reporter User? @relation(fields: [reporterId], references: [id], onDelete: SetNull)
+  
+  @@map("reports")
+}
+
+enum ModerationTarget {
+  post
+  comment
+}
+
+enum ModerationSource {
+  report
+  auto_safety
+}
+
+enum ModerationStatus {
+  pending
+  approved
+  rejected
+}
+
+model ModerationQueue {
+  id         String            @id @default(cuid())
+  targetType ModerationTarget  @map("target_type")
+  targetId   String            @map("target_id")
+  source     ModerationSource
+  status     ModerationStatus  @default(pending)
+  payload    Json              @db.Json
+  reviewerId String?           @map("reviewer_id")
+  decidedAt  DateTime?         @map("decided_at")
+  createdAt  DateTime          @default(now()) @map("created_at")
+  
+  // Relations
+  reviewer User? @relation("Reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  
+  @@unique([targetType, targetId, status], map: "ux_mod_unique")
+  @@map("moderation_queue")
+}
+
+// ===== AI & Learning Artifacts =====
+enum ArtifactType {
+  quiz
+  flashcards
+  explain
+}
+
+enum ArtifactStatus {
+  ready
+  generating
+  failed
+}
+
+model Artifact {
+  id        String          @id @default(cuid())
+  postId    String?         @map("post_id")
+  type      ArtifactType
+  status    ArtifactStatus  @default(ready)
+  meta      Json            @db.Json
+  createdBy String?         @map("created_by")
+  createdAt DateTime        @default(now()) @map("created_at")
+  
+  // Relations
+  post            Post?            @relation(fields: [postId], references: [id], onDelete: Cascade)
+  creator         User?            @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  quizQuestions   QuizQuestion[]
+  flashcards      Flashcard[]
+  quizSubmissions QuizSubmission[]
+  
+  @@map("artifacts")
+}
+
+// Quiz
+model QuizQuestion {
+  id          String @id @default(cuid())
+  artifactId  String @map("artifact_id")
+  stem        String @db.Text
+  explanation String? @db.Text
+  orderNo     Int    @map("order_no")
+  
+  // Relations
+  artifact Artifact     @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  options  QuizOption[]
+  
+  @@index([artifactId, orderNo], map: "idx_qq_artifact")
+  @@map("quiz_questions")
+}
+
+model QuizOption {
+  id         String  @id @default(cuid())
+  questionId String  @map("question_id")
+  content    String  @db.Text
+  isCorrect  Boolean @default(false) @map("is_correct") @db.TinyInt
+  
+  // Relations
+  question QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  
+  @@index([questionId], map: "idx_qo_question")
+  @@map("quiz_options")
+}
+
+model QuizSubmission {
+  id         String   @id @default(cuid())
+  artifactId String   @map("artifact_id")
+  userId     String   @map("user_id")
+  score      Decimal  @db.Decimal(5, 2)
+  answers    Json     @db.Json
+  createdAt  DateTime @default(now()) @map("created_at")
+  
+  // Relations
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([artifactId, userId, createdAt], map: "ux_submission")
+  @@map("quiz_submissions")
+}
+
+// Flashcards
+model Flashcard {
+  id         String @id @default(cuid())
+  artifactId String @map("artifact_id")
+  front      String @db.Text
+  back       String @db.Text
+  example    String? @db.Text
+  orderNo    Int    @map("order_no")
+  
+  // Relations
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  
+  @@index([artifactId, orderNo], map: "idx_fc_artifact")
+  @@map("flashcards")
+}
